@@ -1,10 +1,10 @@
-import numpy as np 
+import numpy as np
 import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter
 from scipy.interpolate import interp1d
 import random
-from scipy.ndimage import map_coordinates
-import json  # JSON読み込みのために追加
+import json
+import math
 
 # -----------------------------
 # パラメータ (Balanced Version)
@@ -13,9 +13,10 @@ N_ITERATIONS = 100
 N_SAMPLES_PER_EDGE = 60
 STEP_SIZE = 100
 STEP_SIZE_DECAY = 0.999
-SPRING_CONSTANT = 40
-DEFAULT_NODE_MASS = 4   
-GRID_SIZE =10000           
+SPRING_CONSTANT = 0
+DEFAULT_NODE_MASS = 500
+WINDOW_SIZE = 10000  # キャンバス全体のサイズ
+GRID_SIZE = 500      # タイル（グリッド）1辺のサイズ
 
 # -----------------------------
 # ノードデータの生成 (Node data generation) - JSONから読み込み
@@ -29,8 +30,8 @@ raw_x = [n["x"] for n in data["nodes"]]
 raw_y = [n["y"] for n in data["nodes"]]
 min_x, max_x_val = min(raw_x), max(raw_x)
 min_y, max_y_val = min(raw_y), max(raw_y)
-# GRID_SIZEはパラメータで指定。元座標をGRID_SIZEにスケール（アスペクト比保持）
-scale = GRID_SIZE / max(max_x_val - min_x, max_y_val - min_y)
+# WINDOW_SIZEはパラメータで指定。元座標をWINDOW_SIZEにスケール（アスペクト比保持）
+scale = WINDOW_SIZE / max(max_x_val - min_x, max_y_val - min_y)
 
 # print("0. Generating parallel edges and a gravity well...")
 
@@ -71,6 +72,7 @@ nodes = {
     for n in data["nodes"]
 }
 
+
 masses = {k: DEFAULT_NODE_MASS for k in nodes.keys()}
 
 # エッジデータの読み込み（"edges" または "links" のキーに対応）
@@ -80,28 +82,30 @@ for e in json_edges:
     edges.append((str(e["source"]), str(e["target"])))
 
 # -----------------------------
-# 力場計算関数 (Force field calculation function)
+# タイル分割ポテンシャル場 & 勾配計算
+# WINDOW_SIZE空間をGRID_SIZEのタイルに分割し、
+# 各タイル中心でポテンシャルを計算 → タイルの傾き（勾配）を定数として使う
 # -----------------------------
-def calculate_potential_field(nodes, masses, grid_size):
-    x = np.arange(grid_size)
-    y = np.arange(grid_size)
-    xx, yy = np.meshgrid(x, y)
+print("1. タイルポテンシャル場を計算中...")
+n_tiles_x = math.ceil(WINDOW_SIZE / GRID_SIZE)
+n_tiles_y = math.ceil(WINDOW_SIZE / GRID_SIZE)
 
-    potential_field = np.zeros_like(xx, dtype=float)
+# 各タイル中心の座標 (WINDOW_SIZE座標系)
+tile_cx = (np.arange(n_tiles_x) + 0.5) * GRID_SIZE
+tile_cy = (np.arange(n_tiles_y) + 0.5) * GRID_SIZE
+XX, YY = np.meshgrid(tile_cx, tile_cy)  # shape: (n_tiles_y, n_tiles_x)
 
-    for name, pos in nodes.items():
-        print(pos)
-        dist_sq = (xx - pos[0])**2 + (yy - pos[1])**2
-        potential_field -= masses[name] / np.sqrt(dist_sq + 1e-9)
+# タイル中心でのポテンシャルを計算
+potential_field = np.zeros_like(XX)
+for name, pos in nodes.items():
+    dist_sq = (XX - pos[0])**2 + (YY - pos[1])**2
+    potential_field -= masses[name] / np.sqrt(dist_sq + 1e-9)
 
-    return potential_field
-
-# -----------------------------
-# ポテンシャル場 & 勾配
-# -----------------------------
-print("1. 重力ポテンシャル場を計算中...")
-potential_field = calculate_potential_field(nodes, masses, GRID_SIZE)
-grad_y, grad_x = np.gradient(potential_field)
+# タイルごとの勾配（傾き）を計算
+# np.gradientはタイルインデックス単位なのでGRID_SIZEで割ってpx単位に変換
+tile_grad_y, tile_grad_x = np.gradient(potential_field)
+tile_grad_x /= GRID_SIZE
+tile_grad_y /= GRID_SIZE
 
 # -----------------------------
 # エッジ初期化
@@ -126,13 +130,13 @@ fig, axes = plt.subplots(1, 2, figsize=(18, 8))
 
 # --- Before Bundling ---
 ax_before = axes[0]
-ax_before.imshow(potential_field, cmap='bone_r', origin='lower', extent=[0, GRID_SIZE, 0, GRID_SIZE], alpha=0.3)
+ax_before.imshow(potential_field, cmap='bone_r', origin='lower', extent=[0, WINDOW_SIZE, 0, WINDOW_SIZE], alpha=0.3)
 for edge in bundled_edges:
     ax_before.plot(edge[:, 0], edge[:, 1], color='cyan', linewidth=1.2, alpha=0.7)
 for name, pos in nodes.items():
     ax_before.scatter(pos[0], pos[1], s=30, c='magenta', zorder=10)
-ax_before.set_xlim(0, GRID_SIZE)
-ax_before.set_ylim(0, GRID_SIZE)
+ax_before.set_xlim(0, WINDOW_SIZE)
+ax_before.set_ylim(0, WINDOW_SIZE)
 ax_before.set_aspect('equal')
 ax_before.set_facecolor('black')
 ax_before.set_title("Edges Before Bundling (Random Nodes)")
@@ -148,30 +152,21 @@ for i in range(N_ITERATIONS):
     print(f"   Iteration {i+1}/{N_ITERATIONS}, Current Step Size: {current_step_size:.2f}")
     for j, edge in enumerate(bundled_edges):
         new_edge = edge.copy()
-        new_edge_spring=new_edge.copy()
         for k in range(1, len(edge) - 1):
-            F_attr=np.array([0.0,0.0])
             pos = edge[k]
-            dx = map_coordinates(grad_x, [[pos[1]], [pos[0]]], order=1)[0]
-            dy = map_coordinates(grad_y, [[pos[1]], [pos[0]]], order=1)[0]
-            F_attr += np.array([dx, dy])
-            new_edge[k]+=current_step_size *F_attr
-        F_spring=list()
+            # エッジ点がどのタイルに属するか特定し、そのタイルの傾きを力として使う
+            ti = int(np.clip(pos[0] / GRID_SIZE, 0, n_tiles_x - 1))
+            tj = int(np.clip(pos[1] / GRID_SIZE, 0, n_tiles_y - 1))
+            dx = tile_grad_x[tj, ti]
+            dy = tile_grad_y[tj, ti]
+            new_edge[k] += current_step_size * np.array([dx, dy])
         edge_length = np.linalg.norm(edge[-1] - edge[0])
-        kp = SPRING_CONSTANT / (edge_length)
+        kp = SPRING_CONSTANT / edge_length
         for k in range(1, len(edge) - 1):
             current = new_edge[k]
-            left = new_edge[k-1]
-            right = new_edge[k+1]
-
-            # 左ばね
-            vec_left = left - current
-
-            # 右ばね
-            vec_right = right - current
-            edge_length = np.linalg.norm(edge[-1] - edge[0])
-
-            new_edge[k] +=( kp * (vec_left + vec_right))
+            vec_left = new_edge[k-1] - current
+            vec_right = new_edge[k+1] - current
+            new_edge[k] += kp * (vec_left + vec_right)
 
         bundled_edges[j] = new_edge
 
@@ -211,7 +206,7 @@ print(f"Total edge length: {total_length:.2f}")
 # バンドリング後の可視化 (Visualization after bundling)
 # -----------------------------
 ax_after = axes[1]
-ax_after.imshow(potential_field, cmap='bone_r', origin='lower', extent=[0, GRID_SIZE, 0, GRID_SIZE], alpha=0.3)
+ax_after.imshow(potential_field, cmap='bone_r', origin='lower', extent=[0, WINDOW_SIZE, 0, WINDOW_SIZE], alpha=0.3)
 display_field = -potential_field  # 正にする
 
 display_field = np.log1p(display_field)  # log圧縮
@@ -231,10 +226,10 @@ cs = ax_after.contourf(
 for name, pos in nodes.items():
     ax_after.scatter(pos[0], pos[1], c="red", s=40)
 
-fig.colorbar(cs, ax=ax_before)
+fig.colorbar(cs, ax=ax_after)
 
-ax_after.set_xlim(0, GRID_SIZE)
-ax_after.set_ylim(0, GRID_SIZE)
+ax_after.set_xlim(0, WINDOW_SIZE)
+ax_after.set_ylim(0, WINDOW_SIZE)
 ax_after.set_aspect("equal")
 ax_after.set_title("Potential Field (Contour)")
 
@@ -243,8 +238,8 @@ for edge in bundled_edges:
 
 for name, pos in nodes.items():
     ax_after.scatter(pos[0], pos[1], s=30, c='magenta', zorder=10)
-ax_after.set_xlim(0, GRID_SIZE)
-ax_after.set_ylim(0, GRID_SIZE)
+ax_after.set_xlim(0, WINDOW_SIZE)
+ax_after.set_ylim(0, WINDOW_SIZE)
 ax_after.set_aspect('equal')
 ax_after.set_facecolor('black')
 ax_after.set_title("Edges After Bundling (Random Nodes)")

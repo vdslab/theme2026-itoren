@@ -10,13 +10,14 @@ import math
 # パラメータ (Balanced Version)
 # -----------------------------
 N_ITERATIONS = 100
-N_SAMPLES_PER_EDGE = 60
-STEP_SIZE = 100
+N_SAMPLES_PER_EDGE = 600
+STEP_SIZE = 450
 STEP_SIZE_DECAY = 0.999
-SPRING_CONSTANT = 0
-DEFAULT_NODE_MASS = 500
+SPRING_CONSTANT = 10
+DEFAULT_NODE_MASS = 100
 WINDOW_SIZE = 10000  # キャンバス全体のサイズ
-GRID_SIZE = 500      # タイル（グリッド）1辺のサイズ
+GRID_SIZE = 100      # タイル（グリッド）1辺のサイズ
+SIGMA = 0            # ポテンシャル場に掛けるガウシアンフィルタのsigma（0で無効）
 
 # -----------------------------
 # ノードデータの生成 (Node data generation) - JSONから読み込み
@@ -100,6 +101,10 @@ potential_field = np.zeros_like(XX)
 for name, pos in nodes.items():
     dist_sq = (XX - pos[0])**2 + (YY - pos[1])**2
     potential_field -= masses[name] / np.sqrt(dist_sq + 1e-9)
+
+# 密集地の勾配が急峻になりすぎないようガウシアンフィルタで均す
+if SIGMA > 0:
+    potential_field = gaussian_filter(potential_field, sigma=SIGMA)
 
 # タイルごとの勾配（傾き）を計算
 # np.gradientはタイルインデックス単位なのでGRID_SIZEで割ってpx単位に変換

@@ -4,6 +4,7 @@ import itertools
 import time
 import math
 import numpy as np
+from scipy.ndimage import gaussian_filter
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -13,17 +14,18 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # -----------------------------
 # 試すパラメータの候補値
-# DEFAULT_NODE_MASS=500, SPRING_CONSTANT=0 付近を探索
+# DEFAULT_NODE_MASS=300 付近を細かく、SPRING_CONSTANTは広めに探索
 # -----------------------------
 PARAM_GRID = {
-    "DEFAULT_NODE_MASS": [100, 300, 500, 700, 1000],
-    "STEP_SIZE":         [50, 100, 200],
-    "SPRING_CONSTANT":   [0, 5, 20],
+    "DEFAULT_NODE_MASS": [100,200, 300, 400],
+    "STEP_SIZE":         [50,150,250,300,450,1000],
+    "SPRING_CONSTANT":   [0,  20, 40, 60],
     "STEP_SIZE_DECAY":   [0.999],
     "N_ITERATIONS":      [100],
     "N_SAMPLES_PER_EDGE": [60],
     "WINDOW_SIZE":       [10000],
-    "GRID_SIZE":         [500],
+    "GRID_SIZE":         [100],
+    "SIGMA":             [0, 2],
 }
 
 # -----------------------------
@@ -52,9 +54,9 @@ def build_nodes(window_size):
 _tile_cache = {}
 
 
-def get_tile_gradients(window_size, grid_size, node_mass):
+def get_tile_gradients(window_size, grid_size, node_mass, sigma):
     """test2.py方式: WINDOW_SIZEをGRID_SIZEのタイルに分割してポテンシャル場を計算"""
-    key = (window_size, grid_size, node_mass)
+    key = (window_size, grid_size, node_mass, sigma)
     if key in _tile_cache:
         return _tile_cache[key]
 
@@ -71,6 +73,9 @@ def get_tile_gradients(window_size, grid_size, node_mass):
     for pos in nodes.values():
         dist_sq = (XX - pos[0])**2 + (YY - pos[1])**2
         potential_field -= node_mass / np.sqrt(dist_sq + 1e-9)
+
+    if sigma > 0:
+        potential_field = gaussian_filter(potential_field, sigma=sigma)
 
     tile_grad_y, tile_grad_x = np.gradient(potential_field)
     tile_grad_x /= grid_size
@@ -158,7 +163,7 @@ def main():
 
         t0 = time.time()
         nodes, potential_field, tile_grad_x, tile_grad_y, n_tiles_x, n_tiles_y = get_tile_gradients(
-            params["WINDOW_SIZE"], params["GRID_SIZE"], params["DEFAULT_NODE_MASS"]
+            params["WINDOW_SIZE"], params["GRID_SIZE"], params["DEFAULT_NODE_MASS"], params["SIGMA"]
         )
         bundled_edges = run_bundling(
             nodes, tile_grad_x, tile_grad_y, n_tiles_x, n_tiles_y,

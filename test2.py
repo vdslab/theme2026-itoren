@@ -15,13 +15,14 @@ import math
 N_ITERATIONS = 50
 N_SAMPLES_PER_EDGE = 100
 STEP_SIZE = 50
-STEP_SIZE_DECAY = 0.9999
-SPRING_CONSTANT = 30
-DEFAULT_NODE_MASS = 5000
+STEP_SIZE_DECAY = 0.99
+SPRING_CONSTANT = 600
+DEFAULT_NODE_MASS = 15000
 WINDOW_SIZE = 10000  # キャンバス全体のサイズ
 GRID_SIZE = 10      # タイル（グリッド）1辺のサイズ
 SIGMA = 0.3            # ポテンシャル場に掛けるガウシアンフィルタのsigma（0で無効）
 DENSITY_RADIUS = 500   # この半径内のノード数で質量を割り、密集地の重力を弱める
+SPRING_SUBSTEPS = 3     # kp=0.5(安定限界)を1 iterationあたり複数回適用してテンションを強化する回数
 
 # -----------------------------
 # ノードデータの生成 (Node data generation) - JSONから読み込み
@@ -83,7 +84,7 @@ node_ids = list(nodes.keys())
 coords = np.array([nodes[nid] for nid in node_ids])
 tree = cKDTree(coords)
 neighbor_counts = tree.query_ball_point(coords, r=DENSITY_RADIUS, return_length=True)
-masses = {nid: DEFAULT_NODE_MASS / count for nid, count in zip(node_ids, neighbor_counts)}
+masses = {nid: DEFAULT_NODE_MASS / ((count-1)/3+1) for nid, count in zip(node_ids, neighbor_counts)}
 
 # エッジデータの読み込み（"edges" または "links" のキーに対応）
 edges = []
@@ -148,6 +149,10 @@ for i in range(N_ITERATIONS):
     print(f"   Iteration {i+1}/{N_ITERATIONS}, Current Step Size: {current_step_size:.2f}")
     for j, edge in enumerate(bundled_edges):
         new_edge = edge.copy()
+        # 重力の1ステップ移動量は、このエッジ自身の隣接サンプル間隔(natural_length)を
+        # 超えないようクリップする。GRID_SIZEなど一律の値だと短いエッジ(間隔が狭い)で
+        # 重力が張力に対して相対的に大きくなりすぎ、テンションが追いつかなくなるため。
+        max_step = edge_natural_length[j]
         for k in range(1, len(edge) - 1):
             pos = edge[k]
             # エッジ点がどのタイルに属するか特定し、そのタイルの傾きを力として使う
@@ -155,19 +160,27 @@ for i in range(N_ITERATIONS):
             tj = int(np.clip(pos[1] / GRID_SIZE, 0, n_tiles_y - 1))
             dx = tile_grad_x[tj, ti]
             dy = tile_grad_y[tj, ti]
-            new_edge[k] += current_step_size * np.array([dx, dy])
-            if current_step_size * np.array([dx, dy])[1]>1000:
-                print()
-                print(np.array([dx, dy]))
+            force = current_step_size * np.array([dx, dy])
+            force_mag = np.linalg.norm(force)
+            if force_mag > max_step:
+                force = force / force_mag * max_step
+            new_edge[k] += force
+        # kp*(vec_left+vec_right)は隣接点の平均に何%寄せるかという比率の力なので
+        # 本来edge_lengthで割る必要はない。ただ既存のチューニング(短〜中距離エッジ)を
+        # 崩さないよう、長いエッジだけkpがゼロに近づかないよう下限(KP_MIN)を設ける
         edge_length = np.linalg.norm(edge[-1] - edge[0])
-        kp = SPRING_CONSTANT / edge_length
-        if kp>0.5:
-            kp=0.5
-        for k in range(1, len(edge) - 1):
-            current = new_edge[k]
-            vec_left = new_edge[k-1] - current
-            vec_right = new_edge[k+1] - current
-            new_edge[k] += kp * (vec_left + vec_right)
+        KP_MAX = 0.5  # 安定限界(これ以上はJacobi更新が振動する)
+        KP_MIN = 0.2 * KP_MAX  # 最長エッジでもKP_MAXの20%は保証する
+        kp = min(SPRING_CONSTANT / edge_length, KP_MAX) if edge_length > 0 else 0
+        kp = max(kp, KP_MIN)
+        # kp自体は0.5(安定限界)で頭打ちなので、安定した1手を複数回連続で適用して
+        # テンションの実効的な効き目を強化する
+        for _ in range(SPRING_SUBSTEPS):
+            for k in range(1, len(edge) - 1):
+                current = new_edge[k]
+                vec_left = new_edge[k-1] - current
+                vec_right = new_edge[k+1] - current
+                new_edge[k] += kp * (vec_left + vec_right)
 
         bundled_edges[j] = new_edge
 

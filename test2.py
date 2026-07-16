@@ -16,7 +16,7 @@ N_ITERATIONS = 50
 N_SAMPLES_PER_EDGE = 100
 STEP_SIZE = 50
 STEP_SIZE_DECAY = 0.99
-SPRING_CONSTANT = 600
+SPRING_CONSTANT = 300
 DEFAULT_NODE_MASS = 15000
 WINDOW_SIZE = 10000  # キャンバス全体のサイズ
 GRID_SIZE = 10      # タイル（グリッド）1辺のサイズ
@@ -84,7 +84,7 @@ node_ids = list(nodes.keys())
 coords = np.array([nodes[nid] for nid in node_ids])
 tree = cKDTree(coords)
 neighbor_counts = tree.query_ball_point(coords, r=DENSITY_RADIUS, return_length=True)
-masses = {nid: DEFAULT_NODE_MASS / ((count-1)/3+1) for nid, count in zip(node_ids, neighbor_counts)}
+masses = {nid: DEFAULT_NODE_MASS / ((count-1)/2.5+1) for nid, count in zip(node_ids, neighbor_counts)}
 
 # エッジデータの読み込み（"edges" または "links" のキーに対応）
 edges = []

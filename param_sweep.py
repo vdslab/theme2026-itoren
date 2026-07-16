@@ -5,6 +5,7 @@ import time
 import math
 import numpy as np
 from scipy.ndimage import gaussian_filter
+from scipy.spatial import cKDTree
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -12,20 +13,23 @@ import matplotlib.pyplot as plt
 OUTPUT_DIR = "param_sweep_results"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+KP_MAX = 0.5  # 密集地の短いエッジでkp = SPRING_CONSTANT/edge_lengthが暴走しないようにする上限
+
 # -----------------------------
 # 試すパラメータの候補値
-# DEFAULT_NODE_MASS=300 付近を細かく、SPRING_CONSTANTは広めに探索
+# test2.pyでいい感じだった設定周辺を探索
 # -----------------------------
 PARAM_GRID = {
-    "DEFAULT_NODE_MASS": [100,200, 300, 400],
-    "STEP_SIZE":         [50,150,250,300,450,1000],
-    "SPRING_CONSTANT":   [0,  20, 40, 60],
-    "STEP_SIZE_DECAY":   [0.999],
-    "N_ITERATIONS":      [100],
-    "N_SAMPLES_PER_EDGE": [60],
+    "DEFAULT_NODE_MASS": [5000],
+    "STEP_SIZE":         [50],
+    "SPRING_CONSTANT":   [30],
+    "STEP_SIZE_DECAY":   [0.9999],
+    "N_ITERATIONS":      [50],
+    "N_SAMPLES_PER_EDGE": [100],
     "WINDOW_SIZE":       [10000],
-    "GRID_SIZE":         [100],
-    "SIGMA":             [0, 2],
+    "GRID_SIZE":         [10],
+    "SIGMA":             [0, 0.3, 0.6],
+    "DENSITY_RADIUS":    [300, 500, 800],
 }
 
 # -----------------------------
@@ -54,14 +58,20 @@ def build_nodes(window_size):
 _tile_cache = {}
 
 
-def get_tile_gradients(window_size, grid_size, node_mass, sigma):
+def get_tile_gradients(window_size, grid_size, node_mass, sigma, density_radius):
     """test2.py方式: WINDOW_SIZEをGRID_SIZEのタイルに分割してポテンシャル場を計算"""
-    key = (window_size, grid_size, node_mass, sigma)
+    key = (window_size, grid_size, node_mass, sigma, density_radius)
     if key in _tile_cache:
         return _tile_cache[key]
 
     nodes = build_nodes(window_size)
-    masses = {k: node_mass for k in nodes.keys()}
+
+    # 密集地ほど重力(質量)を弱める: 半径density_radius以内のノード数(自分を含む)で質量を割る
+    node_ids = list(nodes.keys())
+    coords = np.array([nodes[nid] for nid in node_ids])
+    tree = cKDTree(coords)
+    neighbor_counts = tree.query_ball_point(coords, r=density_radius, return_length=True)
+    masses = {nid: node_mass / count for nid, count in zip(node_ids, neighbor_counts)}
 
     n_tiles_x = math.ceil(window_size / grid_size)
     n_tiles_y = math.ceil(window_size / grid_size)
@@ -70,9 +80,9 @@ def get_tile_gradients(window_size, grid_size, node_mass, sigma):
     XX, YY = np.meshgrid(tile_cx, tile_cy)
 
     potential_field = np.zeros_like(XX)
-    for pos in nodes.values():
+    for name, pos in nodes.items():
         dist_sq = (XX - pos[0])**2 + (YY - pos[1])**2
-        potential_field -= node_mass / np.sqrt(dist_sq + 1e-9)
+        potential_field -= masses[name] / np.sqrt(dist_sq + 1e-9)
 
     if sigma > 0:
         potential_field = gaussian_filter(potential_field, sigma=sigma)
@@ -107,9 +117,15 @@ def run_bundling(nodes, tile_grad_x, tile_grad_y, n_tiles_x, n_tiles_y,
                 tj = int(np.clip(pos[1] / grid_size, 0, n_tiles_y - 1))
                 dx = tile_grad_x[tj, ti]
                 dy = tile_grad_y[tj, ti]
-                new_edge[k] += current_step * np.array([dx, dy])
+                force = current_step * np.array([dx, dy])
+                # タイル解像度以上に一気に動くと隣のタイルの力を無視して飛び出すのでクリップ
+                force_mag = np.linalg.norm(force)
+                if force_mag > grid_size:
+                    force = force / force_mag * grid_size
+                new_edge[k] += force
             edge_length = np.linalg.norm(edge[-1] - edge[0])
-            kp = spring_k / edge_length if edge_length > 0 else 0
+            # 密集地の短いエッジではkpが暴走して発散するのでクリップする
+            kp = min(spring_k / edge_length, KP_MAX) if edge_length > 0 else 0
             for k in range(1, len(edge) - 1):
                 current = new_edge[k]
                 new_edge[k] += kp * ((new_edge[k-1] - current) + (new_edge[k+1] - current))
@@ -163,7 +179,8 @@ def main():
 
         t0 = time.time()
         nodes, potential_field, tile_grad_x, tile_grad_y, n_tiles_x, n_tiles_y = get_tile_gradients(
-            params["WINDOW_SIZE"], params["GRID_SIZE"], params["DEFAULT_NODE_MASS"], params["SIGMA"]
+            params["WINDOW_SIZE"], params["GRID_SIZE"], params["DEFAULT_NODE_MASS"], params["SIGMA"],
+            params["DENSITY_RADIUS"]
         )
         bundled_edges = run_bundling(
             nodes, tile_grad_x, tile_grad_y, n_tiles_x, n_tiles_y,

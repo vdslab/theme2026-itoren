@@ -1,7 +1,10 @@
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter
 from scipy.interpolate import interp1d
+from scipy.spatial import cKDTree
 import random
 import json
 import math
@@ -9,15 +12,16 @@ import math
 # -----------------------------
 # パラメータ (Balanced Version)
 # -----------------------------
-N_ITERATIONS = 100
+N_ITERATIONS = 50
 N_SAMPLES_PER_EDGE = 100
-STEP_SIZE = 150
+STEP_SIZE = 50
 STEP_SIZE_DECAY = 0.9999
-SPRING_CONSTANT = 60
-DEFAULT_NODE_MASS = 300
+SPRING_CONSTANT = 30
+DEFAULT_NODE_MASS = 5000
 WINDOW_SIZE = 10000  # キャンバス全体のサイズ
 GRID_SIZE = 10      # タイル（グリッド）1辺のサイズ
-SIGMA = 0.2            # ポテンシャル場に掛けるガウシアンフィルタのsigma（0で無効）
+SIGMA = 0.3            # ポテンシャル場に掛けるガウシアンフィルタのsigma（0で無効）
+DENSITY_RADIUS = 500   # この半径内のノード数で質量を割り、密集地の重力を弱める
 
 # -----------------------------
 # ノードデータの生成 (Node data generation) - JSONから読み込み
@@ -74,7 +78,12 @@ nodes = {
 }
 
 
-masses = {k: DEFAULT_NODE_MASS for k in nodes.keys()}
+# 密集地ほど重力(質量)を弱める: 半径DENSITY_RADIUS以内にあるノード数(自分を含む)で質量を割る
+node_ids = list(nodes.keys())
+coords = np.array([nodes[nid] for nid in node_ids])
+tree = cKDTree(coords)
+neighbor_counts = tree.query_ball_point(coords, r=DENSITY_RADIUS, return_length=True)
+masses = {nid: DEFAULT_NODE_MASS / count for nid, count in zip(node_ids, neighbor_counts)}
 
 # エッジデータの読み込み（"edges" または "links" のキーに対応）
 edges = []
@@ -129,24 +138,6 @@ for start_key, end_key in edges:
     bundled_edges.append(edge)
 
 # -----------------------------
-# 可視化準備 (Visualization preparation)
-# -----------------------------
-fig, axes = plt.subplots(1, 2, figsize=(18, 8))
-
-# --- Before Bundling ---
-ax_before = axes[0]
-ax_before.imshow(potential_field, cmap='bone_r', origin='lower', extent=[0, WINDOW_SIZE, 0, WINDOW_SIZE], alpha=0.3)
-for edge in bundled_edges:
-    ax_before.plot(edge[:, 0], edge[:, 1], color='cyan', linewidth=1.2, alpha=0.7)
-for name, pos in nodes.items():
-    ax_before.scatter(pos[0], pos[1], s=30, c='magenta', zorder=10)
-ax_before.set_xlim(0, WINDOW_SIZE)
-ax_before.set_ylim(0, WINDOW_SIZE)
-ax_before.set_aspect('equal')
-ax_before.set_facecolor('black')
-ax_before.set_title("Edges Before Bundling (Random Nodes)")
-
-# -----------------------------
 # 反復計算 (Iterative calculation)
 # -----------------------------
 print(f"3. {N_ITERATIONS}回の反復計算でバンドリングを実行中...")
@@ -165,6 +156,9 @@ for i in range(N_ITERATIONS):
             dx = tile_grad_x[tj, ti]
             dy = tile_grad_y[tj, ti]
             new_edge[k] += current_step_size * np.array([dx, dy])
+            if current_step_size * np.array([dx, dy])[1]>1000:
+                print()
+                print(np.array([dx, dy]))
         edge_length = np.linalg.norm(edge[-1] - edge[0])
         kp = SPRING_CONSTANT / edge_length
         if kp>0.5:
@@ -210,46 +204,62 @@ for edge in bundled_edges:
 
 print(f"Total edge length: {total_length:.2f}")
 # -----------------------------
-# バンドリング後の可視化 (Visualization after bundling)
+# 可視化 (param_sweep.pyと同じスタイルで1枚に保存)
 # -----------------------------
-ax_after = axes[1]
-ax_after.imshow(potential_field, cmap='bone_r', origin='lower', extent=[0, WINDOW_SIZE, 0, WINDOW_SIZE], alpha=0.3)
+fig, ax = plt.subplots(figsize=(9, 9))
+ax.imshow(potential_field, cmap="bone_r", origin="lower",
+          extent=[0, WINDOW_SIZE, 0, WINDOW_SIZE], alpha=0.3)
+for edge in bundled_edges:
+    ax.plot(edge[:, 0], edge[:, 1], color="cyan", linewidth=1.0, alpha=0.7)
+for name, pos in nodes.items():
+    ax.scatter(pos[0], pos[1], s=15, c="magenta", zorder=10)
+ax.set_xlim(0, WINDOW_SIZE)
+ax.set_ylim(0, WINDOW_SIZE)
+ax.set_aspect("equal")
+ax.set_facecolor("black")
+
+params = {
+    "DEFAULT_NODE_MASS": DEFAULT_NODE_MASS,
+    "STEP_SIZE": STEP_SIZE,
+    "SPRING_CONSTANT": SPRING_CONSTANT,
+    "STEP_SIZE_DECAY": STEP_SIZE_DECAY,
+    "N_ITERATIONS": N_ITERATIONS,
+    "N_SAMPLES_PER_EDGE": N_SAMPLES_PER_EDGE,
+    "WINDOW_SIZE": WINDOW_SIZE,
+    "GRID_SIZE": GRID_SIZE,
+    "SIGMA": SIGMA,
+}
+param_text = "\n".join(f"{k} = {v}" for k, v in params.items())
+ax.text(0.02, 0.98, param_text, transform=ax.transAxes,
+        va="top", ha="left", fontsize=9, color="white", family="monospace",
+        bbox=dict(facecolor="black", alpha=0.6, edgecolor="white", boxstyle="round,pad=0.4"))
+
+fig.tight_layout()
+fig.savefig("test2_result.png", dpi=120)
+plt.close(fig)
+print("test2_result.png に保存しました。")
+
+# -----------------------------
+# ポテンシャル場のみを可視化（勾配が急峻な場所を確認するデバッグ用）
+# -----------------------------
+fig2, ax2 = plt.subplots(figsize=(9, 9))
 display_field = -potential_field  # 正にする
-
-display_field = np.log1p(display_field)  # log圧縮
-
-display_field = (display_field - display_field.min()) / (
-    display_field.max() - display_field.min()
-)
-
-cs = ax_after.contourf(
-    display_field,
+display_field = np.log1p(display_field)  # log圧縮でダイナミックレンジを圧縮
+cs = ax2.contourf(
+    XX, YY, display_field,
     levels=50,
     cmap="viridis",
-    origin="lower"
+    origin="lower",
 )
-
-# ノード表示
+fig2.colorbar(cs, ax=ax2, label="log1p(-potential)")
 for name, pos in nodes.items():
-    ax_after.scatter(pos[0], pos[1], c="red", s=40)
+    ax2.scatter(pos[0], pos[1], c="red", s=15, zorder=10)
+ax2.set_xlim(0, WINDOW_SIZE)
+ax2.set_ylim(0, WINDOW_SIZE)
+ax2.set_aspect("equal")
+ax2.set_title(f"Potential Field (GRID_SIZE={GRID_SIZE}, SIGMA={SIGMA})")
 
-fig.colorbar(cs, ax=ax_after)
-
-ax_after.set_xlim(0, WINDOW_SIZE)
-ax_after.set_ylim(0, WINDOW_SIZE)
-ax_after.set_aspect("equal")
-ax_after.set_title("Potential Field (Contour)")
-
-for edge in bundled_edges:
-    ax_after.plot(edge[:, 0], edge[:, 1], color='cyan', linewidth=1.2, alpha=0.7)
-
-for name, pos in nodes.items():
-    ax_after.scatter(pos[0], pos[1], s=30, c='magenta', zorder=10)
-ax_after.set_xlim(0, WINDOW_SIZE)
-ax_after.set_ylim(0, WINDOW_SIZE)
-ax_after.set_aspect('equal')
-ax_after.set_facecolor('black')
-ax_after.set_title("Edges After Bundling (Random Nodes)")
-
-plt.tight_layout()
-plt.show()
+fig2.tight_layout()
+fig2.savefig("test2_potential_field.png", dpi=120)
+plt.close(fig2)
+print("test2_potential_field.png に保存しました。")

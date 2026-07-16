@@ -10,14 +10,14 @@ import math
 # パラメータ (Balanced Version)
 # -----------------------------
 N_ITERATIONS = 100
-N_SAMPLES_PER_EDGE = 600
-STEP_SIZE = 450
-STEP_SIZE_DECAY = 0.999
-SPRING_CONSTANT = 10
-DEFAULT_NODE_MASS = 100
+N_SAMPLES_PER_EDGE = 100
+STEP_SIZE = 150
+STEP_SIZE_DECAY = 0.9999
+SPRING_CONSTANT = 60
+DEFAULT_NODE_MASS = 300
 WINDOW_SIZE = 10000  # キャンバス全体のサイズ
-GRID_SIZE = 100      # タイル（グリッド）1辺のサイズ
-SIGMA = 0            # ポテンシャル場に掛けるガウシアンフィルタのsigma（0で無効）
+GRID_SIZE = 10      # タイル（グリッド）1辺のサイズ
+SIGMA = 0.2            # ポテンシャル場に掛けるガウシアンフィルタのsigma（0で無効）
 
 # -----------------------------
 # ノードデータの生成 (Node data generation) - JSONから読み込み
@@ -167,6 +167,8 @@ for i in range(N_ITERATIONS):
             new_edge[k] += current_step_size * np.array([dx, dy])
         edge_length = np.linalg.norm(edge[-1] - edge[0])
         kp = SPRING_CONSTANT / edge_length
+        if kp>0.5:
+            kp=0.5
         for k in range(1, len(edge) - 1):
             current = new_edge[k]
             vec_left = new_edge[k-1] - current

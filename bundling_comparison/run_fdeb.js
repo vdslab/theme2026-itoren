@@ -19,7 +19,7 @@ const path = require("path");
 const SCRIPT_DIR = __dirname;
 const PROJECT_ROOT = path.dirname(SCRIPT_DIR);
 const RESULTS_DIR = path.join(SCRIPT_DIR, "results");
-const DEFAULT_DATASET = path.join(PROJECT_ROOT, "airlines.json");
+const DEFAULT_DATASET = path.join(PROJECT_ROOT, "email_eu_core_graph.json");
 
 const WINDOW_SIZE = 10000; // 他手法(gravity_edge_bundling.py等)と同じ座標空間。FDEB自体のパラメータは弄らない。
 const N_SAMPLES = 100;

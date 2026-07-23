@@ -12,12 +12,12 @@ import math
 # -----------------------------
 # パラメータ (Balanced Version)
 # -----------------------------
-N_ITERATIONS = 50
+N_ITERATIONS = 0
 N_SAMPLES_PER_EDGE = 100
 STEP_SIZE = 50
 STEP_SIZE_DECAY = 0.99
-SPRING_CONSTANT = 300
-DEFAULT_NODE_MASS = 3000
+SPRING_CONSTANT = 0
+DEFAULT_NODE_MASS = 15000
 WINDOW_SIZE = 10000  # キャンバス全体のサイズ
 GRID_SIZE = 10      # タイル（グリッド）1辺のサイズ
 SIGMA = 0.3            # ポテンシャル場に掛けるガウシアンフィルタのsigma（0で無効）
@@ -29,7 +29,7 @@ GRAVITY_DECAY = 50
 # ノードデータの生成 (Node data generation) - JSONから読み込み
 # -----------------------------
 print("0. Loading and normalizing node positions...")
-with open('multicluster_graph.json', 'r') as f:
+with open('netscience.json', 'r') as f:
     data = json.load(f)
 
 # 1. すべてのノードからXとYの最小値・最大値を取得

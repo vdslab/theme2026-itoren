@@ -17,18 +17,19 @@ N_SAMPLES_PER_EDGE = 100
 STEP_SIZE = 50
 STEP_SIZE_DECAY = 0.99
 SPRING_CONSTANT = 300
-DEFAULT_NODE_MASS = 15000
+DEFAULT_NODE_MASS = 3000
 WINDOW_SIZE = 10000  # キャンバス全体のサイズ
 GRID_SIZE = 10      # タイル（グリッド）1辺のサイズ
 SIGMA = 0.3            # ポテンシャル場に掛けるガウシアンフィルタのsigma（0で無効）
 DENSITY_RADIUS = 500   # この半径内のノード数で質量を割り、密集地の重力を弱める
 SPRING_SUBSTEPS = 3     # kp=0.5(安定限界)を1 iterationあたり複数回適用してテンションを強化する回数
+GRAVITY_DECAY = 50
 
 # -----------------------------
 # ノードデータの生成 (Node data generation) - JSONから読み込み
 # -----------------------------
 print("0. Loading and normalizing node positions...")
-with open('airlines.json', 'r') as f:
+with open('multicluster_graph.json', 'r') as f:
     data = json.load(f)
 
 # 1. すべてのノードからXとYの最小値・最大値を取得
@@ -84,7 +85,7 @@ node_ids = list(nodes.keys())
 coords = np.array([nodes[nid] for nid in node_ids])
 tree = cKDTree(coords)
 neighbor_counts = tree.query_ball_point(coords, r=DENSITY_RADIUS, return_length=True)
-masses = {nid: DEFAULT_NODE_MASS / ((count-1)/2.5+1) for nid, count in zip(node_ids, neighbor_counts)}
+masses = {nid: DEFAULT_NODE_MASS / ((count-1)/GRAVITY_DECAY+1) for nid, count in zip(node_ids, neighbor_counts)}
 
 # エッジデータの読み込み（"edges" または "links" のキーに対応）
 edges = []
@@ -202,6 +203,11 @@ for i in range(N_ITERATIONS):
 with open("bundling_log.json", "w", encoding="utf-8") as f:
     json.dump(iteration_log, f, indent=2, ensure_ascii=False)
 print("bundling_log.json に保存しました。")
+
+# evaluate.py で他手法と比較できる共通フォーマット(エッジごとの[x,y]点列)で最終結果を保存
+with open("test2_result.json", "w") as f:
+    json.dump([edge.tolist() for edge in bundled_edges], f)
+print("test2_result.json に保存しました。")
 
 # -----------------------------
 # 全エッジ長の計算

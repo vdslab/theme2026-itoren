@@ -12,24 +12,24 @@ import math
 # -----------------------------
 # パラメータ (Balanced Version)
 # -----------------------------
-N_ITERATIONS = 0
-N_SAMPLES_PER_EDGE = 100
+N_ITERATIONS = 50
+N_SAMPLES_PER_EDGE = 50
 STEP_SIZE = 50
 STEP_SIZE_DECAY = 0.99
-SPRING_CONSTANT = 0
+SPRING_CONSTANT = 300
 DEFAULT_NODE_MASS = 15000
 WINDOW_SIZE = 10000  # キャンバス全体のサイズ
 GRID_SIZE = 10      # タイル（グリッド）1辺のサイズ
 SIGMA = 0.3            # ポテンシャル場に掛けるガウシアンフィルタのsigma（0で無効）
 DENSITY_RADIUS = 500   # この半径内のノード数で質量を割り、密集地の重力を弱める
 SPRING_SUBSTEPS = 3     # kp=0.5(安定限界)を1 iterationあたり複数回適用してテンションを強化する回数
-GRAVITY_DECAY = 50
+GRAVITY_DECAY = 2.5
 
 # -----------------------------
 # ノードデータの生成 (Node data generation) - JSONから読み込み
 # -----------------------------
 print("0. Loading and normalizing node positions...")
-with open('netscience.json', 'r') as f:
+with open('eurosis.json', 'r') as f:
     data = json.load(f)
 
 # 1. すべてのノードからXとYの最小値・最大値を取得
@@ -82,6 +82,8 @@ nodes = {
 
 # 密集地ほど重力(質量)を弱める: 半径DENSITY_RADIUS以内にあるノード数(自分を含む)で質量を割る
 node_ids = list(nodes.keys())
+for nid in node_ids:
+    print(f"Node {nid}: position={nodes[nid]}")
 coords = np.array([nodes[nid] for nid in node_ids])
 tree = cKDTree(coords)
 neighbor_counts = tree.query_ball_point(coords, r=DENSITY_RADIUS, return_length=True)

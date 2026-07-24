@@ -34,17 +34,17 @@ GRID_SCALE = WINDOW_SIZE / GRID_RES
 # -----------------------------
 # パラメータ（Rust版 SimulationState::new のデフォルト値そのまま）
 # -----------------------------
-SPRING_K = 0.05
+SPRING_K = 0.06
 DT = 0.5
 DAMPING = 0.95
 GRAVITY_PARAM = 0.03125
 POTENTIAL_MAX = 16.0
-GRAVITY_ALPHA = 1.0
-CONTROL_POINT_SPACING = 10.0   # GRID_RES空間での間隔（GRID_RES=1000に対する目安値）
-N_STEPS = 400                   # 元コードはインタラクティブに毎フレームstep()するので、
+GRAVITY_ALPHA = 0.05
+CONTROL_POINT_SPACING = 15.0   # GRID_RES空間での間隔（GRID_RES=1000に対する目安値）
+N_STEPS = 600                   # 元コードはインタラクティブに毎フレームstep()するので、
                                  # バッチ実行用に固定回数を採用（アニーリングなし、一定パラメータ）
 N_SAMPLES = 100                  # 出力時にevaluate.pyの他手法と合わせて統一する点数
-DEFAULT_MASS = 1.0               # 元コードにmass算出ロジックがないため一律とする
+DEFAULT_MASS = 40.0               # 元コードにmass算出ロジックがないため一律とする
 EPS = 1e-9
 
 

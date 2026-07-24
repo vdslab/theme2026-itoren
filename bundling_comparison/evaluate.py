@@ -47,18 +47,22 @@ def resolve_result_path(path):
 # データ読み込み
 # -----------------------------
 def load_nodes_edges(dataset_path):
+    """データセットJSONを読み込み、ノード座標を原点合わせ＋WINDOW_SIZEスケールに正規化する。
+    これにより、生の座標がどんな単位・範囲でも全データセットを同じ座標系で比較できる。"""
     with open(dataset_path, "r") as f:
         data = json.load(f)
     raw_x = [n["x"] for n in data["nodes"]]
     raw_y = [n["y"] for n in data["nodes"]]
     min_x, max_x_val = min(raw_x), max(raw_x)
     min_y, max_y_val = min(raw_y), max(raw_y)
+    # x/yのうち広い方の幅がWINDOW_SIZEに収まるように統一スケールを決める（縦横比を保つため）
     scale = WINDOW_SIZE / max(max_x_val - min_x, max_y_val - min_y)
     nodes = {
         str(n["id"]): np.array([(n["x"] - min_x) * scale, (n["y"] - min_y) * scale])
         for n in data["nodes"]
     }
     edges = []
+    # データセットによってキー名が"edges"/"links"どちらの場合もあるので両対応
     json_edges = data.get("edges", data.get("links", []))
     for e in json_edges:
         edges.append((str(e["source"]), str(e["target"])))
@@ -66,6 +70,7 @@ def load_nodes_edges(dataset_path):
 
 
 def make_straight_edges(nodes, edges, n_samples):
+    """バンドリング前の基準となる直線エッジを、始点-終点をn_samples点で等間隔に補間して生成する"""
     straight_edges = []
     for start_key, end_key in edges:
         s, t = nodes[start_key], nodes[end_key]
@@ -78,12 +83,15 @@ def make_straight_edges(nodes, edges, n_samples):
 
 
 def resample_to_n_points(edge, n):
+    """折れ線エッジを弧長パラメータ化し、n点に等間隔でリサンプリングする。
+    手法ごとに出力される点数が異なっていても指標計算を揃えられるようにするため。"""
     edge = np.asarray(edge, dtype=float)
     diffs = np.diff(edge, axis=0)
     seg_len = np.sqrt(np.sum(diffs ** 2, axis=1))
     arc = np.concatenate([[0.0], np.cumsum(seg_len)])
     total = arc[-1]
     if total < 1e-9:
+        # 始点と終点が同じ（長さ0）の退化エッジは補間できないので同じ点を複製する
         return np.tile(edge[0], (n, 1))
     target = np.linspace(0, total, n)
     fx = interp1d(arc, edge[:, 0])
@@ -92,6 +100,8 @@ def resample_to_n_points(edge, n):
 
 
 def load_result_file(path, n_edges):
+    """バンドリング手法の出力JSON(エッジごとの点列)を読み込み、N_SAMPLES点にリサンプリングする。
+    エッジ数がデータセットと一致しない場合は結果ファイルの取り違えとみなしエラーにする。"""
     with open(path, "r") as f:
         raw = json.load(f)
     if len(raw) != n_edges:
@@ -103,11 +113,15 @@ def load_result_file(path, n_edges):
 # 評価指標
 # -----------------------------
 def to_canvas(edge_list, window_size=WINDOW_SIZE, canvas_res=CANVAS_RES):
+    """WINDOW_SIZE座標系からラスタ描画用のCANVAS_RES解像度座標系へ縮小する"""
     s = canvas_res / window_size
     return [e * s for e in edge_list]
 
 
 def count_ink_pixels(edge_list, canvas_res=CANVAS_RES):
+    """全エッジを黒背景に描画し、線が乗っている（=インクがある）ピクセル数を数える。
+    Ink Reductionの計算に使う。matplotlibで実際にラスタ化するのはアンチエイリアス・
+    線の重なりを含めた「見た目上の面積」を再現するため。"""
     dpi = 100
     fig_inches = canvas_res / dpi
     fig, ax = plt.subplots(figsize=(fig_inches, fig_inches), dpi=dpi)
@@ -128,6 +142,8 @@ def count_ink_pixels(edge_list, canvas_res=CANVAS_RES):
 
 
 def ink_reduction(bundled_edges, straight_edges):
+    """バンドリングによって描画インク（占有ピクセル数）がどれだけ減ったかを割合で返す。
+    1.0に近いほど、直線描画時より視覚的な線の量が大きく減った（＝バンドリング効果が大きい）ことを示す。"""
     straight_canvas = to_canvas(straight_edges)
     bundled_canvas = to_canvas(bundled_edges)
     ink_before = count_ink_pixels(straight_canvas)
@@ -136,6 +152,7 @@ def ink_reduction(bundled_edges, straight_edges):
 
 
 def distortion(bundled_edges, straight_edges):
+    """バンドル後のエッジ長が直線距離の何倍に伸びたかの平均値。1.0に近いほど歪みが小さい。"""
     ratios = []
     for bundled, orig in zip(bundled_edges, straight_edges):
         direct_len = np.linalg.norm(orig[-1] - orig[0])
@@ -147,6 +164,8 @@ def distortion(bundled_edges, straight_edges):
 
 
 def ambiguity(edge_list):
+    """各ピクセルに何本のエッジが重なって通っているかの平均値。
+    値が大きいほど「どのエッジがどれだか区別しにくい」＝視覚的な曖昧さが高いことを示す。"""
     edge_list_canvas = to_canvas(edge_list)
     pixel_edges = defaultdict(set)
     for j, edge in enumerate(edge_list_canvas):
@@ -166,6 +185,8 @@ def node_edge_min_distances(nodes_dict, node_id_list, edge_keys, edge_list):
     n_edges = len(edge_list)
     seg_per_edge = edge_list[0].shape[0] - 1
 
+    # 全エッジの全線分の始点(A)・終点(B)を1つの配列にまとめ、ノードごとにベクトル化して
+    # 最近傍点への距離を一括計算する（ノード数×線分数のループを避けるため）
     A = np.concatenate([e[:-1] for e in edge_list], axis=0)
     B = np.concatenate([e[1:] for e in edge_list], axis=0)
     AB = B - A
@@ -178,10 +199,12 @@ def node_edge_min_distances(nodes_dict, node_id_list, edge_keys, edge_list):
     all_distances = []
     for v in node_id_list:
         p = nodes_dict[v]
+        # 点pから各線分ABへの垂線の足の位置tを求め、[0,1]にクランプして線分上の最近傍点を得る
         t = np.clip(np.sum((p - A) * AB, axis=1) / AB_len_sq, 0, 1)
         closest = A + t[:, None] * AB
         d = np.linalg.norm(p - closest, axis=1)
         d_min_per_edge = d.reshape(n_edges, seg_per_edge).min(axis=1)
+        # vが端点になっているエッジ自身との距離は0になって当然なので比較対象から除外する
         own_mask = (sources == v) | (targets == v)
         all_distances.append(d_min_per_edge[~own_mask])
     return np.concatenate(all_distances)
@@ -201,6 +224,7 @@ def main():
 
     dataset_path = Path(args.dataset)
     stem = dataset_path.stem
+    # airlines(デフォルト)以外のデータセットを使うときは出力ファイル名が衝突しないよう接頭辞を付ける
     label = args.label or ("" if stem == "airlines" else f"{stem}_")
     result_paths = args.result_files
 
@@ -214,6 +238,7 @@ def main():
     all_dists = {}
     summary = {}
 
+    # バンドリング無しの直線描画を基準（distortion=1.0固定）として先に評価しておく
     print("Evaluating Straight (baseline)...")
     all_dists["Straight"] = node_edge_min_distances(nodes, node_ids, edges, straight_edges)
     summary["Straight"] = {
@@ -221,6 +246,7 @@ def main():
         "ambiguity": ambiguity(straight_edges),
     }
 
+    # 引数で渡された各手法の結果ファイルについて指標を計算
     for path in result_paths:
         resolved = resolve_result_path(path)
         print(f"Evaluating {path} ({resolved})...")
@@ -242,8 +268,9 @@ def main():
             "node_edge_dist_min": float(dist.min()),
         }
 
+    # 結果を整形してコンソールに表として出力
     print("\n=== Summary ===")
-    header = f"{'File':<28} {'InkReduction':>12} {'Distortion':>11} {'Ambiguity':>10} {'Dist(median)':>13}"
+    header = f"{'File':<28} {'InkReduction':>12} {'Distortion':>11} {'Ambiguity':>10} {'Dist(min)':>13}"
     print(header)
     print("-" * len(header))
     s = summary["Straight"]
@@ -252,13 +279,15 @@ def main():
     for path in result_paths:
         r = summary[path]
         print(f"{path:<28} {r['ink_reduction']*100:>11.2f}% {r['distortion']:>11.4f} "
-              f"{r['ambiguity']:>10.4f} {r['node_edge_dist_median']:>13.2f}")
+              f"{r['ambiguity']:>10.4f} {r['node_edge_dist_min']:>13.2f}")
 
+    # 指標のサマリーをJSONとして保存（他ツールでの再利用・比較のため）
     result_json_path = RESULTS_DIR / f"{label}evaluate_result.json"
     with open(result_json_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
     print(f"\n{result_json_path} に保存しました。")
 
+    # ノード-エッジ最短距離の分布を手法ごとに箱ひげ図で可視化（0に近い外れ値＝ノードへの衝突を示す）
     fig, ax = plt.subplots(figsize=(2.5 + 2 * len(labels), 8))
     ax.boxplot([all_dists[l] for l in labels], labels=labels, showfliers=True, widths=0.5)
     ax.set_ylabel("Node-Edge Minimum Distance (px)")

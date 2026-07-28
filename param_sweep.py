@@ -32,7 +32,7 @@ PARAM_GRID = {
     "SIGMA":             [0],
     "MAX_POTENTIAL":     [1000,2000,3000,4000, 5000, None],
     "DENSITY_RADIUS":    [100, 150, 200],
-    "GRAVITY_DECAY":     [0,0.25, 0.5],
+    "GRAVITY_DECAY":     [0,10, 20,50,100],
     "SPRING_SUBSTEPS":   [5],
 }
 
@@ -76,7 +76,7 @@ def get_tile_gradients(window_size, grid_size, node_mass, sigma, max_potential, 
     tree = cKDTree(coords)
     neighbor_counts = tree.query_ball_point(coords, r=density_radius, return_length=True)
     masses = {
-        nid: node_mass / ((count - 1) / gravity_decay + 1)
+        nid: node_mass / ((count - 1) * gravity_decay + 1)
         for nid, count in zip(node_ids, neighbor_counts)
     }
 

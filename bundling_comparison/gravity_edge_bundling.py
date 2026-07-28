@@ -1,224 +1,226 @@
-"""
-likr-sandbox/gravity-edge-bundling (Rust/WebGPU実装) の物理演算部分(simulation.rs)を
-忠実にPythonへ移植したもの。
-https://github.com/likr-sandbox/gravity-edge-bundling/tree/master/gravity-edge-bundling/src
+"""Gravity-based edge bundling: core calculation, implemented independently of the Rust/WASM version.
 
-元実装との対応:
-- Node.mass: 元コードにmassの計算方法(フロントエンド側)が含まれていなかったため、
-  DEFAULT_MASSで全ノード一律とする(必要なら関数を差し替え可能)。
-- 座標系: 元コードはノード座標=グリッド解像度(width/height)が同一スケールだったが、
-  本ポートではWINDOW_SIZE=10000(他手法と共通)とGRID_RES(場の解像度)を分離し、
-  シミュレーション自体はGRID_RES空間で行い、最後にWINDOW_SIZEへスケールし直す。
-- control_point_spacingベースの分割数(FDEBのような倍化スケジュールではなく、
-  エッジ長/間隔で決まる固定分割数)、spring_k・dt・dampingは元コードのデフォルト値。
-- ポテンシャル/力場は「疑似ニュートン重力」: 質量に応じた特異点回避半径(gravity_alpha)と
-  深さの上限(potential_max)を持つ、通常の1/r重力よりソフトなモデル。
+Design notes
+------------
+Each node acts as a point mass generating a Plummer-softened gravitational
+potential (this avoids the 1/d singularity at the node center without needing
+an ad-hoc cutoff radius):
+
+    phi_i(p)  = -G * m_i / sqrt(|p - node_i|^2 + eps_i^2)
+    force_i(p) = -grad(phi_i)(p) = -G * m_i * (p - node_i) / (|p - node_i|^2 + eps_i^2)^1.5
+
+`eps_i` (the softening length) is derived from `potential_max` so that the
+deepest point of every node's well has the same depth regardless of mass:
+
+    eps_i = G * m_i / potential_max   =>   phi_i(node_i) = -potential_max
+
+Edges are discretized into control points (polylines). Each interior control
+point feels:
+  - a discrete-Laplacian spring force pulling it straight (Hooke's law against
+    its two neighbors on the same edge), and
+  - the summed gravity force from every node, pulling it toward mass
+    concentrations and causing nearby edges to bend together ("bundling").
+
+Endpoints of every edge are pinned to their node position and never move.
+
+All parameters (G, potential_max, spring_k, dt, damping, spacing, steps, ...)
+are supplied by the caller -- nothing is hardcoded in the calculation itself.
 """
-import json
-import sys
-import time
-from pathlib import Path
+
+from __future__ import annotations
+
+from dataclasses import dataclass
 
 import numpy as np
-from scipy.interpolate import interp1d
-
-SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent
-RESULTS_DIR = SCRIPT_DIR / "results"
-DEFAULT_DATASET = PROJECT_ROOT / "airlines.json"
-
-WINDOW_SIZE = 10000
-GRID_RES = 1000          # ポテンシャル/力場を計算する解像度（この空間でシミュレーションを行う）
-GRID_SCALE = WINDOW_SIZE / GRID_RES
-
-# -----------------------------
-# パラメータ（Rust版 SimulationState::new のデフォルト値そのまま）
-# -----------------------------
-SPRING_K = 0.06
-DT = 0.5
-DAMPING = 0.95
-GRAVITY_PARAM = 0.03125
-POTENTIAL_MAX = 16.0
-GRAVITY_ALPHA = 0.05
-CONTROL_POINT_SPACING = 15.0   # GRID_RES空間での間隔（GRID_RES=1000に対する目安値）
-N_STEPS = 600                   # 元コードはインタラクティブに毎フレームstep()するので、
-                                 # バッチ実行用に固定回数を採用（アニーリングなし、一定パラメータ）
-N_SAMPLES = 100                  # 出力時にevaluate.pyの他手法と合わせて統一する点数
-DEFAULT_MASS = 40.0               # 元コードにmass算出ロジックがないため一律とする
-EPS = 1e-9
 
 
-def load_nodes_edges(dataset_path):
-    with open(dataset_path, "r") as f:
-        data = json.load(f)
-    raw_x = [n["x"] for n in data["nodes"]]
-    raw_y = [n["y"] for n in data["nodes"]]
-    min_x, max_x_val = min(raw_x), max(raw_x)
-    min_y, max_y_val = min(raw_y), max(raw_y)
-    scale = WINDOW_SIZE / max(max_x_val - min_x, max_y_val - min_y)
-    node_ids = [str(n["id"]) for n in data["nodes"]]
-    positions = np.array([
-        [(n["x"] - min_x) * scale, (n["y"] - min_y) * scale] for n in data["nodes"]
-    ])
-    id_to_idx = {nid: i for i, nid in enumerate(node_ids)}
-    json_edges = data.get("edges", data.get("links", []))
-    edges = [(id_to_idx[str(e["source"])], id_to_idx[str(e["target"])]) for e in json_edges]
-    return node_ids, positions, edges
+@dataclass
+class Polyline:
+    """Control points for a single bundled edge."""
+
+    edge_index: int
+    source: int
+    target: int
+    points: np.ndarray  # shape (n, 2), points[0] and points[-1] are pinned
 
 
-def resample_to_n_points(edge, n):
-    diffs = np.diff(edge, axis=0)
-    seg_len = np.sqrt(np.sum(diffs ** 2, axis=1))
-    arc = np.concatenate([[0.0], np.cumsum(seg_len)])
-    total = arc[-1]
-    if total < 1e-9:
-        return np.tile(edge[0], (n, 1))
-    target = np.linspace(0, total, n)
-    fx = interp1d(arc, edge[:, 0])
-    fy = interp1d(arc, edge[:, 1])
-    return np.stack([fx(target), fy(target)], axis=1)
+def build_control_points(
+    nodes_xy: np.ndarray,
+    edges: np.ndarray,
+    spacing: float,
+) -> list[Polyline]:
+    """Create the initial (straight-line) control points for every edge.
 
+    nodes_xy : (N, 2) float array of node positions.
+    edges    : (E, 2) int array of (source_index, target_index) pairs.
+    spacing  : target distance between consecutive control points; the
+               number of points on an edge is chosen so points are spaced
+               at roughly this distance (minimum 3 points per edge).
+    """
+    spacing = max(float(spacing), 1.0)
+    polylines: list[Polyline] = []
 
-# -----------------------------
-# update_physics_fields の移植（simulation.rs 98-144行目）
-# -----------------------------
-def compute_fields(grid_res, node_pos_grid, node_mass,
-                    gravity_param=GRAVITY_PARAM, potential_max=POTENTIAL_MAX, gravity_alpha=GRAVITY_ALPHA):
-    scale = grid_res / 256.0
-    potential_max_scaled = max(potential_max / scale, 1e-5)
-
-    xs = np.arange(grid_res, dtype=np.float64)
-    XX, YY = np.meshgrid(xs, xs)  # XX[row,col]=col(=x), YY[row,col]=row(=y)
-
-    potential = np.zeros((grid_res, grid_res))
-    force_x = np.zeros((grid_res, grid_res))
-    force_y = np.zeros((grid_res, grid_res))
-
-    for (nx, ny), mass in zip(node_pos_grid, node_mass):
-        dx = XX - nx
-        dy = YY - ny
-        d = np.sqrt(dx * dx + dy * dy)
-        softening_scaled = (gravity_param * mass) / potential_max_scaled
-        denom = np.maximum(d - gravity_alpha * mass, softening_scaled)
-
-        potential -= (gravity_param * mass) / denom
-
-        active = (d > 0.0) & (d - gravity_alpha * mass > softening_scaled)
-        f_mag = np.where(active, (gravity_param * mass) / (denom * denom), 0.0)
-        d_safe = np.where(d > 0, d, 1.0)
-        force_x += np.where(active, f_mag * (dx / d_safe), 0.0)
-        force_y += np.where(active, f_mag * (dy / d_safe), 0.0)
-
-    potential *= scale
-    force_x *= scale * scale
-    force_y *= scale * scale
-    return potential, force_x, force_y
-
-
-def bilinear_sample(field, px, py, grid_res):
-    px = np.clip(px, 0, grid_res - 1)
-    py = np.clip(py, 0, grid_res - 1)
-    col = np.floor(px).astype(int)
-    row = np.floor(py).astype(int)
-    next_col = np.minimum(col + 1, grid_res - 1)
-    next_row = np.minimum(row + 1, grid_res - 1)
-    fx = px - col
-    fy = py - row
-
-    f00 = field[row, col]
-    f10 = field[row, next_col]
-    f01 = field[next_row, col]
-    f11 = field[next_row, next_col]
-    return ((1 - fx) * (1 - fy) * f00 + fx * (1 - fy) * f10
-            + (1 - fx) * fy * f01 + fx * fy * f11)
-
-
-# -----------------------------
-# reset_control_points の移植（simulation.rs 64-96行目）
-# -----------------------------
-def init_control_points(positions_grid, edges, spacing):
-    spacing = max(spacing, 1.0)
-    control_points = []
-    for s, t in edges:
-        p0, p1 = positions_grid[s], positions_grid[t]
-        dist = np.linalg.norm(p1 - p0)
+    for e_idx, (s, t) in enumerate(edges):
+        p0 = nodes_xy[s]
+        p1 = nodes_xy[t]
+        dist = float(np.linalg.norm(p1 - p0))
         n = max(int(dist // spacing) + 2, 3)
-        t_vals = np.linspace(0, 1, n)
-        pts = p0[None, :] + t_vals[:, None] * (p1 - p0)[None, :]
-        control_points.append(pts)
-    return control_points
+        tt = np.linspace(0.0, 1.0, n)[:, None]
+        pts = p0[None, :] + tt * (p1[None, :] - p0[None, :])
+        polylines.append(Polyline(e_idx, int(s), int(t), pts.astype(np.float64)))
+
+    return polylines
 
 
-# -----------------------------
-# step の移植（simulation.rs 146-197行目）
-# -----------------------------
-def step(control_points, force_x, force_y, grid_res,
-         spring_k=SPRING_K, dt=DT, damping=DAMPING, max_disp=5.0):
-    new_control_points = []
-    for pts in control_points:
-        current = pts
-        new_pts = current.copy()
-        if len(current) > 2:
-            prev = current[:-2]
-            curr = current[1:-1]
-            nxt = current[2:]
+def gravity_potential_and_force(
+    points: np.ndarray,
+    nodes_xy: np.ndarray,
+    nodes_mass: np.ndarray,
+    gravity_param: float,
+    potential_max: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Vectorized Plummer-softened gravity from every node onto every point.
 
-            f_spring = spring_k * (prev + nxt - 2.0 * curr)
+    points     : (M, 2) query positions.
+    nodes_xy   : (N, 2) node positions.
+    nodes_mass : (N,) node masses.
 
-            fgx = bilinear_sample(force_x, curr[:, 0], curr[:, 1], grid_res)
-            fgy = bilinear_sample(force_y, curr[:, 0], curr[:, 1], grid_res)
-            f_grav = np.stack([fgx, fgy], axis=1)
+    Returns (potential[M], force[M, 2]) summed over all nodes.
+    """
+    G = gravity_param
+    diff = points[:, None, :] - nodes_xy[None, :, :]          # (M, N, 2)
+    d2 = np.einsum("mnd,mnd->mn", diff, diff)                  # (M, N)
 
-            f = f_spring + f_grav
-            d = f * dt
-            d_len = np.linalg.norm(d, axis=1, keepdims=True)
-            scale_factor = np.minimum(1.0, max_disp / np.maximum(d_len, EPS))
-            d = d * scale_factor
+    eps = (G * nodes_mass) / max(potential_max, 1e-8)          # (N,)
+    eps2 = eps * eps
 
-            updated = curr + d * damping
-            updated = np.clip(updated, 0.0, grid_res - 1)
-            new_pts[1:-1] = updated
-        new_control_points.append(new_pts)
-    return new_control_points
+    inv_dist = 1.0 / np.sqrt(d2 + eps2[None, :])                # (M, N)
+    potential = -np.sum(G * nodes_mass[None, :] * inv_dist, axis=1)
 
+    inv_dist3 = inv_dist ** 3
+    force_mag = G * nodes_mass[None, :] * inv_dist3             # (M, N)
+    force = -np.einsum("mn,mnd->md", force_mag, diff)           # (M, 2)
 
-def run_gravity_eb(node_ids, positions, edges, verbose=True):
-    positions_grid = positions / GRID_SCALE
-    node_mass = np.full(len(node_ids), DEFAULT_MASS)
-
-    if verbose:
-        print("computing potential/force fields...")
-    t0 = time.time()
-    _, force_x, force_y = compute_fields(GRID_RES, positions_grid, node_mass)
-    if verbose:
-        print(f"   done [{time.time()-t0:.1f}s]")
-
-    control_points = init_control_points(positions_grid, edges, CONTROL_POINT_SPACING)
-
-    for i in range(N_STEPS):
-        if verbose and ((i + 1) % 50 == 0 or i == 0):
-            print(f"step {i+1}/{N_STEPS}")
-        control_points = step(control_points, force_x, force_y, GRID_RES)
-
-    bundled_edges = [pts * GRID_SCALE for pts in control_points]
-    return bundled_edges
+    return potential, force
 
 
-if __name__ == "__main__":
-    dataset_path = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_DATASET
-    stem = dataset_path.stem
-    out_name = "gravity_eb_result.json" if stem == "airlines" else f"{stem}_gravity_eb_result.json"
+def spring_force(points: np.ndarray) -> np.ndarray:
+    """Discrete-Laplacian spring force for interior points of one polyline.
 
-    print(f"Loading {dataset_path}...")
-    node_ids, positions, edges = load_nodes_edges(dataset_path)
-    print(f"nodes={len(node_ids)}, edges={len(edges)}")
+    points: (n, 2). Returns (n, 2) with the force at endpoints set to zero
+    (endpoints are pinned and never integrated).
+    """
+    force = np.zeros_like(points)
+    if len(points) > 2:
+        force[1:-1] = points[:-2] + points[2:] - 2.0 * points[1:-1]
+    return force
 
-    t0 = time.time()
-    bundled = run_gravity_eb(node_ids, positions, edges)
-    print(f"gravity-edge-bundling done in {time.time()-t0:.1f}s")
 
-    output = [resample_to_n_points(e, N_SAMPLES).tolist() for e in bundled]
-    RESULTS_DIR.mkdir(exist_ok=True)
-    with open(RESULTS_DIR / out_name, "w") as f:
-        json.dump(output, f)
-    print(f"{RESULTS_DIR / out_name} に保存しました。")
+def step(
+    polylines: list[Polyline],
+    nodes_xy: np.ndarray,
+    nodes_mass: np.ndarray,
+    gravity_param: float,
+    potential_max: float,
+    spring_k: float,
+    dt: float,
+    damping: float,
+    max_displacement: float | None = None,
+) -> None:
+    """Advance every polyline's interior control points by one relaxation step, in place."""
+    # Concatenate all interior points across all edges into one batch so the
+    # gravity calculation is vectorized over every moving point at once.
+    interior_slices = []
+    interior_points = []
+    for pl in polylines:
+        n = len(pl.points)
+        if n <= 2:
+            interior_slices.append(None)
+            continue
+        interior_slices.append((len(interior_points), len(interior_points) + n - 2))
+        interior_points.append(pl.points[1:-1])
+
+    if not interior_points:
+        return
+
+    batch = np.concatenate(interior_points, axis=0)
+    _, f_gravity = gravity_potential_and_force(
+        batch, nodes_xy, nodes_mass, gravity_param, potential_max
+    )
+
+    offset = 0
+    for pl, sl in zip(polylines, interior_slices):
+        if sl is None:
+            continue
+        start, end = sl
+        f_spring = spring_k * spring_force(pl.points)[1:-1]
+        f_total = f_spring + f_gravity[start:end]
+
+        disp = f_total * dt
+        if max_displacement is not None:
+            lengths = np.linalg.norm(disp, axis=1, keepdims=True)
+            too_far = lengths[:, 0] > max_displacement
+            if np.any(too_far):
+                disp[too_far] *= max_displacement / lengths[too_far]
+
+        pl.points[1:-1] += disp * damping
+        offset += end - start
+
+
+def simulate(
+    nodes_xy: np.ndarray,
+    nodes_mass: np.ndarray,
+    edges: np.ndarray,
+    *,
+    spacing: float,
+    gravity_param: float,
+    potential_max: float,
+    spring_k: float,
+    dt: float,
+    damping: float,
+    n_steps: int,
+    max_displacement: float | None = 5.0,
+) -> list[Polyline]:
+    """Run the full bundling calculation and return the final polylines.
+
+    Every physical/numerical parameter is a required keyword argument --
+    callers decide the values, this function only implements the calculation.
+    """
+    polylines = build_control_points(nodes_xy, edges, spacing)
+    for _ in range(n_steps):
+        step(
+            polylines,
+            nodes_xy,
+            nodes_mass,
+            gravity_param,
+            potential_max,
+            spring_k,
+            dt,
+            damping,
+            max_displacement,
+        )
+    return polylines
+
+
+def potential_grid(
+    nodes_xy: np.ndarray,
+    nodes_mass: np.ndarray,
+    width: int,
+    height: int,
+    gravity_param: float,
+    potential_max: float,
+    grid_step: int = 1,
+) -> np.ndarray:
+    """Optional: sample the potential field on a regular grid, for visualization only.
+
+    Returns an array of shape (height // grid_step, width // grid_step).
+    """
+    xs = np.arange(0, width, grid_step, dtype=np.float64)
+    ys = np.arange(0, height, grid_step, dtype=np.float64)
+    gx, gy = np.meshgrid(xs, ys)
+    pts = np.stack([gx.ravel(), gy.ravel()], axis=1)
+
+    potential, _ = gravity_potential_and_force(
+        pts, nodes_xy, nodes_mass, gravity_param, potential_max
+    )
+    return potential.reshape(gy.shape)

@@ -28,7 +28,7 @@ const N_SAMPLES = 100;
 
 // チューニングしたFDEBパラメータ
 const TUNED = {
-  bundling_stiffness: 100.0,        // K: デフォルト0.1 → 束ねる力をさらに強く
+  bundling_stiffness: 1000.0,        // K: デフォルト0.1 → 束ねる力をさらに強く
   compatibility_threshold: 0.2,   // デフォルト0.6 → より多くのエッジ対を束ねる仲間とみなす
   cycles: 10,                     // デフォルト6 → 収束をより丁寧に
 };

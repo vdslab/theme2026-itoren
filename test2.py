@@ -17,13 +17,14 @@ N_SAMPLES_PER_EDGE = 50
 STEP_SIZE = 50
 STEP_SIZE_DECAY = 0.99
 SPRING_CONSTANT = 300
-DEFAULT_NODE_MASS = 15000
+DEFAULT_NODE_MASS = 3000
 WINDOW_SIZE = 10000  # キャンバス全体のサイズ
 GRID_SIZE = 10      # タイル（グリッド）1辺のサイズ
-SIGMA = 0.3            # ポテンシャル場に掛けるガウシアンフィルタのsigma（0で無効）
-DENSITY_RADIUS = 500   # この半径内のノード数で質量を割り、密集地の重力を弱める
+SIGMA = 0            # ポテンシャル場に掛けるガウシアンフィルタのsigma（0で無効）
+MAX_POTENTIAL = 5000  # ポテンシャル場の下限(絶対値の上限)。ノード直近での発散を防ぐ。Noneで無効
+DENSITY_RADIUS = 150   # この半径内のノード数で質量を割り、密集地の重力を弱める
 SPRING_SUBSTEPS = 3     # kp=0.5(安定限界)を1 iterationあたり複数回適用してテンションを強化する回数
-GRAVITY_DECAY = 2.5
+GRAVITY_DECAY = 10
 
 # -----------------------------
 # ノードデータの生成 (Node data generation) - JSONから読み込み
@@ -87,7 +88,7 @@ for nid in node_ids:
 coords = np.array([nodes[nid] for nid in node_ids])
 tree = cKDTree(coords)
 neighbor_counts = tree.query_ball_point(coords, r=DENSITY_RADIUS, return_length=True)
-masses = {nid: DEFAULT_NODE_MASS / ((count-1)/GRAVITY_DECAY+1) for nid, count in zip(node_ids, neighbor_counts)}
+masses = {nid: DEFAULT_NODE_MASS / ((count-1)*GRAVITY_DECAY+1) for nid, count in zip(node_ids, neighbor_counts)}
 
 # エッジデータの読み込み（"edges" または "links" のキーに対応）
 edges = []
@@ -114,6 +115,11 @@ potential_field = np.zeros_like(XX)
 for name, pos in nodes.items():
     dist_sq = (XX - pos[0])**2 + (YY - pos[1])**2
     potential_field -= masses[name] / np.sqrt(dist_sq + 1e-9)
+print(potential_field)
+
+# ノード直近でポテンシャルが発散しすぎないよう下限をクリップ(絶対値をMAX_POTENTIALで頭打ち)
+if MAX_POTENTIAL is not None:
+    potential_field = np.maximum(potential_field, -MAX_POTENTIAL)
 
 # 密集地の勾配が急峻になりすぎないようガウシアンフィルタで均す
 if SIGMA > 0:

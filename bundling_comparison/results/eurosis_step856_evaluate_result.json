@@ -1,0 +1,50 @@
+{
+  "Straight": {
+    "distortion": 1.0,
+    "ambiguity": 2.507759217159237
+  },
+  "results/eurosis_gravity_eb_step856_result.json": {
+    "ink_reduction": 0.9989151524686017,
+    "ink_pixels_before": 305112,
+    "ink_pixels_after": 331,
+    "distortion": 0.02459360057461031,
+    "ambiguity": 88.73809523809524,
+    "node_edge_dist_median": 6014.047579535126,
+    "node_edge_dist_q1": 4556.297721519009,
+    "node_edge_dist_q3": 7431.181561780044,
+    "node_edge_dist_min": 2242.2401133347435
+  },
+  "results/eurosis_gravity_eb_result.json": {
+    "ink_reduction": -0.10031070557696853,
+    "ink_pixels_before": 305112,
+    "ink_pixels_after": 335718,
+    "distortion": 1.1457868693570121,
+    "ambiguity": 2.510594763026331,
+    "node_edge_dist_median": 3490.6986004626306,
+    "node_edge_dist_q1": 2101.782179558626,
+    "node_edge_dist_q3": 5006.678062810297,
+    "node_edge_dist_min": 0.0011424819160431843
+  },
+  "results/eurosis_fdeb_result.json": {
+    "ink_reduction": 0.01944859592543069,
+    "ink_pixels_before": 305112,
+    "ink_pixels_after": 299178,
+    "distortion": 1.0017620893251504,
+    "ambiguity": 2.5405183284776274,
+    "node_edge_dist_median": 3495.399975240847,
+    "node_edge_dist_q1": 2106.7497475787154,
+    "node_edge_dist_q3": 5008.548683173173,
+    "node_edge_dist_min": 0.00012092112406298678
+  },
+  "results/eurosis_kdeeb_result.json": {
+    "ink_reduction": 0.6895402344057264,
+    "ink_pixels_before": 305112,
+    "ink_pixels_after": 94725,
+    "distortion": 2.22203605833967,
+    "ambiguity": 13.51726461175678,
+    "node_edge_dist_median": 3386.3450964030662,
+    "node_edge_dist_q1": 1998.805039429432,
+    "node_edge_dist_q3": 4896.430774455757,
+    "node_edge_dist_min": 0.0008990112639347548
+  }
+}

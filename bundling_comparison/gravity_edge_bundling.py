@@ -2,17 +2,29 @@
 
 Design notes
 ------------
-Each node acts as a point mass generating a Plummer-softened gravitational
-potential (this avoids the 1/d singularity at the node center without needing
-an ad-hoc cutoff radius):
+Each node acts as a point mass generating a softened, radius-clipped
+gravitational potential with three independent parameters:
 
-    phi_i(p)  = -G * m_i / sqrt(|p - node_i|^2 + eps_i^2)
-    force_i(p) = -grad(phi_i)(p) = -G * m_i * (p - node_i) / (|p - node_i|^2 + eps_i^2)^1.5
+  - gravity_param (G)  : overall coupling strength.
+  - potential_max       : caps how deep/steep the well gets near the node
+                           center, by setting a softening length
+                           eps_i = G * m_i / potential_max.
+  - gravity_alpha       : radius (scaled by node mass) around the node
+                           center that is treated as a rigid, force-free
+                           core -- points inside it feel zero force, which
+                           keeps the relaxation stable near massive nodes.
 
-`eps_i` (the softening length) is derived from `potential_max` so that the
-deepest point of every node's well has the same depth regardless of mass:
+Formally, with d = |p - node_i| and shifted distance d' = max(d - alpha*m_i, 0):
 
-    eps_i = G * m_i / potential_max   =>   phi_i(node_i) = -potential_max
+    denom_i(p)   = max(d', eps_i)
+    phi_i(p)     = -G * m_i / denom_i(p)
+    force_i(p)   = 0                                   if d' <= eps_i (inside the core)
+                 = (G * m_i / denom_i(p)^2) * (p - node_i) / d   otherwise
+
+This mirrors the physics used by the Rust/WASM simulation (same three
+parameters, same core/softening behavior) so results can be compared
+directly, while the surrounding code (data structures, integration loop,
+control-point layout) is a fresh, independent design.
 
 Edges are discretized into control points (polylines). Each interior control
 point feels:
@@ -23,8 +35,9 @@ point feels:
 
 Endpoints of every edge are pinned to their node position and never move.
 
-All parameters (G, potential_max, spring_k, dt, damping, spacing, steps, ...)
-are supplied by the caller -- nothing is hardcoded in the calculation itself.
+All parameters (G, potential_max, gravity_alpha, spring_k, dt, damping,
+spacing, steps, ...) are supplied by the caller -- nothing is hardcoded in
+the calculation itself.
 """
 
 from __future__ import annotations
@@ -78,28 +91,45 @@ def gravity_potential_and_force(
     nodes_mass: np.ndarray,
     gravity_param: float,
     potential_max: float,
+    gravity_alpha: float,
+    chunk_size: int = 2048,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Vectorized Plummer-softened gravity from every node onto every point.
+    """Radius-clipped, softened gravity from every node onto every point.
 
-    points     : (M, 2) query positions.
-    nodes_xy   : (N, 2) node positions.
-    nodes_mass : (N,) node masses.
+    points        : (M, 2) query positions.
+    nodes_xy      : (N, 2) node positions.
+    nodes_mass    : (N,) node masses.
+    chunk_size    : points are processed in batches of this size so memory
+                    stays bounded at O(chunk_size * N) regardless of M
+                    (purely a performance knob, not a physical parameter).
 
     Returns (potential[M], force[M, 2]) summed over all nodes.
     """
     G = gravity_param
-    diff = points[:, None, :] - nodes_xy[None, :, :]          # (M, N, 2)
-    d2 = np.einsum("mnd,mnd->mn", diff, diff)                  # (M, N)
+    M = points.shape[0]
+    eps = (G * nodes_mass) / max(potential_max, 1e-8)   # (N,) softening length
+    alpha_mass = gravity_alpha * nodes_mass             # (N,) force-free core radius
 
-    eps = (G * nodes_mass) / max(potential_max, 1e-8)          # (N,)
-    eps2 = eps * eps
+    potential = np.empty(M, dtype=np.float64)
+    force = np.empty((M, 2), dtype=np.float64)
 
-    inv_dist = 1.0 / np.sqrt(d2 + eps2[None, :])                # (M, N)
-    potential = -np.sum(G * nodes_mass[None, :] * inv_dist, axis=1)
+    for start in range(0, M, chunk_size):
+        end = min(start + chunk_size, M)
+        diff = points[start:end, None, :] - nodes_xy[None, :, :]   # (m, N, 2)
+        d2 = np.einsum("mnd,mnd->mn", diff, diff)                  # (m, N)
+        d = np.sqrt(d2)
 
-    inv_dist3 = inv_dist ** 3
-    force_mag = G * nodes_mass[None, :] * inv_dist3             # (M, N)
-    force = -np.einsum("mn,mnd->md", force_mag, diff)           # (M, 2)
+        d_shift = np.maximum(d - alpha_mass[None, :], 0.0)          # core cutout
+        denom = np.maximum(d_shift, eps[None, :])
+
+        potential[start:end] = -np.sum(G * nodes_mass[None, :] / denom, axis=1)
+
+        outside_core = (d_shift > eps[None, :]) & (d > 0.0)
+        force_mag = np.where(outside_core, G * nodes_mass[None, :] / (denom * denom), 0.0)
+        inv_d = np.divide(1.0, d, out=np.zeros_like(d), where=d > 0.0)
+
+        force[start:end, 0] = np.sum(force_mag * diff[:, :, 0] * inv_d, axis=1)
+        force[start:end, 1] = np.sum(force_mag * diff[:, :, 1] * inv_d, axis=1)
 
     return potential, force
 
@@ -122,6 +152,7 @@ def step(
     nodes_mass: np.ndarray,
     gravity_param: float,
     potential_max: float,
+    gravity_alpha: float,
     spring_k: float,
     dt: float,
     damping: float,
@@ -145,7 +176,7 @@ def step(
 
     batch = np.concatenate(interior_points, axis=0)
     _, f_gravity = gravity_potential_and_force(
-        batch, nodes_xy, nodes_mass, gravity_param, potential_max
+        batch, nodes_xy, nodes_mass, gravity_param, potential_max, gravity_alpha
     )
 
     offset = 0
@@ -175,6 +206,7 @@ def simulate(
     spacing: float,
     gravity_param: float,
     potential_max: float,
+    gravity_alpha: float,
     spring_k: float,
     dt: float,
     damping: float,
@@ -194,6 +226,7 @@ def simulate(
             nodes_mass,
             gravity_param,
             potential_max,
+            gravity_alpha,
             spring_k,
             dt,
             damping,
@@ -209,6 +242,7 @@ def potential_grid(
     height: int,
     gravity_param: float,
     potential_max: float,
+    gravity_alpha: float,
     grid_step: int = 1,
 ) -> np.ndarray:
     """Optional: sample the potential field on a regular grid, for visualization only.
@@ -221,6 +255,6 @@ def potential_grid(
     pts = np.stack([gx.ravel(), gy.ravel()], axis=1)
 
     potential, _ = gravity_potential_and_force(
-        pts, nodes_xy, nodes_mass, gravity_param, potential_max
+        pts, nodes_xy, nodes_mass, gravity_param, potential_max, gravity_alpha
     )
     return potential.reshape(gy.shape)

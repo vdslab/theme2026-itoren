@@ -1,0 +1,85 @@
+{
+  "Straight": {
+    "distortion": 1.0,
+    "ambiguity": 2.6457516213898176,
+    "dist_threshold_fractions": {
+      "10": 0.00038529358035138363,
+      "100": 0.004746097695245724,
+      "1000": 0.09640805693056845
+    },
+    "confusion_score_mean": 557694.4001113492,
+    "confusion_score_median": 424558.7685208942
+  },
+  "results/eurosis_gravity_eb_step856_result.json": {
+    "ink_reduction": -0.135196391571357,
+    "ink_pixels_before": 267374,
+    "ink_pixels_after": 303522,
+    "distortion": 1.1385926199460186,
+    "ambiguity": 2.613937551662534,
+    "node_edge_dist_median": 3487.0187901361282,
+    "node_edge_dist_q1": 2097.0581183248587,
+    "node_edge_dist_q3": 5003.90586627259,
+    "node_edge_dist_min": 0.0027522397817376903,
+    "dist_threshold_fractions": {
+      "10": 0.00036936811236352643,
+      "100": 0.004437451851145575,
+      "1000": 0.09693729619253912
+    },
+    "confusion_score_mean": 477267.32155465253,
+    "confusion_score_median": 313799.69926155056
+  },
+  "results/eurosis_gravity_eb_result.json": {
+    "ink_reduction": -0.10503265089350489,
+    "ink_pixels_before": 267374,
+    "ink_pixels_after": 295457,
+    "distortion": 1.1457868693570121,
+    "ambiguity": 2.6363280823662096,
+    "node_edge_dist_median": 3490.698600462631,
+    "node_edge_dist_q1": 2101.782179558627,
+    "node_edge_dist_q3": 5006.678062810297,
+    "node_edge_dist_min": 0.001142481916543764,
+    "dist_threshold_fractions": {
+      "10": 0.00017209779922361802,
+      "100": 0.004050103371698984,
+      "1000": 0.09676293800431077
+    },
+    "confusion_score_mean": 341146.02936203213,
+    "confusion_score_median": 234918.55999605724
+  },
+  "results/eurosis_fdeb_result.json": {
+    "ink_reduction": 0.019437192845976003,
+    "ink_pixels_before": 267374,
+    "ink_pixels_after": 262177,
+    "distortion": 1.0017620893251504,
+    "ambiguity": 2.6850226721913844,
+    "node_edge_dist_median": 3495.399975240847,
+    "node_edge_dist_q1": 2106.7497475787154,
+    "node_edge_dist_q3": 5008.548683173173,
+    "node_edge_dist_min": 0.00012092112406298678,
+    "dist_threshold_fractions": {
+      "10": 0.0003868347546727892,
+      "100": 0.004768496095383485,
+      "1000": 0.096507719536686
+    },
+    "confusion_score_mean": 564324.7112676309,
+    "confusion_score_median": 409056.75592923583
+  },
+  "results/eurosis_kdeeb_result.json": {
+    "ink_reduction": 0.6854331385998639,
+    "ink_pixels_before": 267374,
+    "ink_pixels_after": 84107,
+    "distortion": 2.2220360571341553,
+    "ambiguity": 14.226089986221751,
+    "node_edge_dist_median": 3386.3450963653863,
+    "node_edge_dist_q1": 1998.8050444801538,
+    "node_edge_dist_q3": 4896.430767346133,
+    "node_edge_dist_min": 0.0009036341005753679,
+    "dist_threshold_fractions": {
+      "10": 0.0010285797421060539,
+      "100": 0.008982169435060977,
+      "1000": 0.11440476046143992
+    },
+    "confusion_score_mean": 1417593.102225895,
+    "confusion_score_median": 69565.92940591765
+  }
+}

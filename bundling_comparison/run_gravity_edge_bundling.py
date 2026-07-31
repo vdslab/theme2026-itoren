@@ -12,29 +12,30 @@ from pathlib import Path
 
 import numpy as np
 
-import gravity_bundling as gb
+import gravity_edge_bundling as gb
 
 # --------------------------------------------------------------------------
 # PARAMETERS -- change these to whatever values you want to test.
 # --------------------------------------------------------------------------
-DATA_PATH = Path(__file__).resolve().parent.parent / "public" / "eurosis.json"
+DATA_PATH = r"C:\Users\lotus\theme2026-itoren\eurosis.json"
 
 CANVAS_WIDTH = 960
 CANVAS_HEIGHT = 720
 PADDING = 40
 
 PARAMS = dict(
-    spacing=8.0,
-    gravity_param=0.03125,
-    potential_max=16.0,
-    spring_k=0.05,
-    dt=0.5,
+    spacing=5.0,
+    gravity_param=0.01563,
+    potential_max=0.5,
+    gravity_alpha=0.686,
+    spring_k=0.165,
+    dt=1.0,
     damping=0.95,
     n_steps=200,
     max_displacement=5.0,
 )
 
-DEFAULT_MASS = 1.0
+DEFAULT_MASS = 10
 # --------------------------------------------------------------------------
 
 

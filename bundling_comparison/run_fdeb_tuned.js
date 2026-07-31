@@ -1,10 +1,32 @@
 /*
- run_fdeb.js の比較用ベースラインには手を入れず、FDEBのパラメータを強めに
+ run_fdeb.js の比較用ベースラインには手を入れず、FDEBのパラメータを
  チューニングした版を別出力するランナー。
 
  デフォルトパラメータ(K=0.1, compatibility_threshold=0.6等)だと、eurosis.json
- のような密なグラフではほとんど束ならず直線に近いままだったため、
- bundling_stiffnessを上げ、compatibility_thresholdを下げてより積極的に束ねる。
+ のような密なグラフではほとんど束ならず直線に近いままだったため調整した。
+
+ パラメータ探索で分かったこと(eurosis.jsonでink_reduction/distortion/ambiguityを
+ 計測して比較。詳細はresults/eurosis_sweep_*の実験結果を参照):
+   - bundling_stiffness(K)は「束ねる力」ではなく、d3-ForceEdgeBundling.js内の
+     コメント通り"edge stiffness"（直線に戻そうとするバネの強さ）。したがって
+     K=1000のように大きくするとむしろ曲がりにくくなり束ねが弱まる上、
+     数値的に不安定化して座標が発散する(実測でx座標が-3580億まで発散)。
+     K=0.1〜1程度の小さい値の方がink_reductionが高く安定する。
+   - 効果が一番大きいのはcompatibility_threshold。eurosisのエッジペアは
+     visibility_compatibilityがほぼ0(97.8%のペアで0)になりやすく、
+     デフォルト0.6ではエッジ1本あたり平均6本程度しか束ね相手が見つからない。
+     0.1まで下げると平均100本程度に増え、ink_reductionが約1.9%→約13%に改善。
+     0.05まで下げても平均128本程度で頭打ちになり、むしろdistortionが悪化する。
+   - cyclesは6を超えても(8, 10で試験)ink_reduction/distortionはほぼ変化せず、
+     計算時間だけが増える。step_size(移動量)を初期値より大きくすると
+     distortionが悪化するだけでink_reductionは伸びない。
+   - この結果、FDEBの束ね方式(似た向き・近い位置のエッジ同士を電気的に引き寄せる)
+     はkdeeb(ink_reduction約69%)ほど強くは束ねられない。visibility_compatibilityの
+     制約がボトルネックであり、K/cycles/step_sizeを更に強めても超えられない上限。
+   - compatibility_thresholdを0.1までさらに下げると(全ペアの0%扱いに近い)
+     ink_reductionは微増するがdistortion/ambiguityが悪化するので、0.15の方が
+     ink_reductionをほぼ落とさずdistortion/ambiguityを抑えられる(Pareto良好)。
+     0にすると無関係なエッジ同士まで引き合ってdistortionが15超まで破綻する。
 
  使い方:
    node run_fdeb_tuned.js [データセット.json]
@@ -28,9 +50,9 @@ const N_SAMPLES = 100;
 
 // チューニングしたFDEBパラメータ
 const TUNED = {
-  bundling_stiffness: 1000.0,        // K: デフォルト0.1 → 束ねる力をさらに強く
-  compatibility_threshold: 0.2,   // デフォルト0.6 → より多くのエッジ対を束ねる仲間とみなす
-  cycles: 10,                     // デフォルト6 → 収束をより丁寧に
+  bundling_stiffness: 0.1,        // デフォルトのまま(上げると発散・束ね弱化のリスクがあるだけで得はない)
+  compatibility_threshold: 0.15,  // デフォルト0.6 → 束ね相手とみなすエッジ対を大幅に増やす(効果の本命)
+  cycles: 6,                      // デフォルトのまま(増やしても改善なし)
 };
 
 global.d3 = {};

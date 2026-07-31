@@ -1,0 +1,17 @@
+{
+  "Straight": {
+    "distortion": 1.0,
+    "ambiguity": 2.507759217159237
+  },
+  "results/eurosis_gravity_eb_step856_selfscale_result.json": {
+    "ink_reduction": 0.9989151453574121,
+    "ink_pixels_before": 305110,
+    "ink_pixels_after": 331,
+    "distortion": 0.024593600574610304,
+    "ambiguity": 88.73809523809524,
+    "node_edge_dist_median": 6014.047579535125,
+    "node_edge_dist_q1": 4556.297721519009,
+    "node_edge_dist_q3": 7431.181561780044,
+    "node_edge_dist_min": 2242.240113334744
+  }
+}

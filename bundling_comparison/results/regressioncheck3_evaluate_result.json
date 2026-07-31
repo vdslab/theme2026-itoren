@@ -1,0 +1,43 @@
+{
+  "Straight": {
+    "distortion": 1.0,
+    "ambiguity": 3.045477513895907,
+    "dist_threshold_fractions": {
+      "10": 0.0018772993853325517,
+      "100": 0.019443020184543226,
+      "1000": 0.2567140519638104
+    }
+  },
+  "gravity_eb_result.json": {
+    "ink_reduction": -0.006803559279358495,
+    "ink_pixels_before": 186667,
+    "ink_pixels_after": 187937,
+    "distortion": 1.017240921957281,
+    "ambiguity": 3.1929041465154997,
+    "node_edge_dist_median": 1918.9631848708632,
+    "node_edge_dist_q1": 977.3051834489968,
+    "node_edge_dist_q3": 3568.3674721643097,
+    "node_edge_dist_min": 0.14334979563670208,
+    "dist_threshold_fractions": {
+      "10": 0.00043715132585545817,
+      "100": 0.012064559488328672,
+      "1000": 0.25611960787117516
+    }
+  },
+  "kdeeb_result.json": {
+    "ink_reduction": 0.7946503666957738,
+    "ink_pixels_before": 186667,
+    "ink_pixels_after": 38332,
+    "distortion": 1.496907375129835,
+    "ambiguity": 19.527780786309975,
+    "node_edge_dist_median": 1744.447746550649,
+    "node_edge_dist_q1": 840.877254546173,
+    "node_edge_dist_q3": 3435.8417308786993,
+    "node_edge_dist_min": 0.001730836984686305,
+    "dist_threshold_fractions": {
+      "10": 0.002363477028106379,
+      "100": 0.031544349410560675,
+      "1000": 0.29476051665566977
+    }
+  }
+}
